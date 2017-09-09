@@ -102,7 +102,7 @@ ADnED::ADnED(const char *portName, int maxBuffers, size_t maxMemory, int debug)
              1, /* Autoconnect */
              0, /* default priority */
              0), /* Default stack size*/
-    m_debug(debug),single_file_num(0),capture_file_num(0),pulse_id_dim(1), capture_group_num(0),storageFlag(1),stream_group_num(0),start_every_slap(0),slab_start{0}, slab_size{0},common_aChar_len(256),pulse_num_per_file(45000)
+    m_debug(debug),single_file_num(0),capture_file_num(0),pulse_id_dim(1), capture_group_num(0),storageFlag(1),stream_group_num(0),start_every_slap(0),slab_start{0}, slab_size{0},common_aChar_len(256),pulse_num_per_file(0)
 {
 
   int status = asynSuccess;
@@ -1272,7 +1272,12 @@ void ADnED::eventHandler(shared_ptr<epics::pvData::PVStructure> const &pv_struct
     /*Flag for storage */
     getIntegerParam(ADnEDHdfPauseParam, &storageFlag);
     getIntegerParam(ADnEDHdfNumPulsePerFileParam, &time_per_file);
-    pulse_num_per_file = time_per_file*25;
+    
+		/*time per file*/
+    time_t rawtime;
+		time(&rawtime);
+
+		//pulse_num_per_file = time_per_file*25;
     /* the write mode : single , capture , stream  */
     if(storageFlag==0) {getIntegerParam(ADnEDHdfWriteModeParam, &hdfFileWriteMode);
             setStringParam(ADnEDHdfStatusMessageParam, "Storing Data");
@@ -1291,13 +1296,15 @@ void ADnED::eventHandler(shared_ptr<epics::pvData::PVStructure> const &pv_struct
 
               // capture mode
               case 1:
-                // time_t t;
-                //  cout << " the current time is " << time(&t) << "    "  <<asctime(localtime(&t))<<endl;
-                if(capture_group_num % pulse_num_per_file == 0){
-                setIntegerParam(ADnEDCaptureHdfFileNumberParam, capture_file_num);
+                //if(capture_group_num % pulse_num_per_file == 0){
+                if(((time(&rawtime)-pulse_num_per_file)>=time_per_file) || (pulse_num_per_file==0) ){ 
+						 		setIntegerParam(ADnEDCaptureHdfFileNumberParam, capture_file_num);
                 char *file_time; 
                   time_t timep;  
-                  time(&timep); 
+                  time(&timep);
+		              cout<<" the T2 is : "<<pulse_num_per_file <<endl;
+									pulse_num_per_file = time(&timep);
+									cout<<" the T1 is : "<<time(&rawtime)<<endl;
                   file_time = ctime(&timep);
                   char *p;
                   char mFileName_year[3]={'0'};
@@ -1371,11 +1378,18 @@ void ADnED::eventHandler(shared_ptr<epics::pvData::PVStructure> const &pv_struct
                 p = strtok(NULL, sep);
                 flag++;
               }
-                sprintf(single_hdf_file_name,"%.4s%.2s%.2s%.2s%.2s%.2s%.3s",mFileName_year,mFileName_month,mFileName_day,mFileName_hour,mFileName_min,mFileName_second,".h5");
+                sprintf(single_hdf_file_name,"%.1s%.4s%.2s%.2s%.2s%.2s%.2s%.3s","/",mFileName_year,mFileName_month,mFileName_day,mFileName_hour,mFileName_min,mFileName_second,".h5");
                 cout<<"the current file name is < "<<single_hdf_file_name<<" > "<<endl;
                 setStringParam(ADnEDHdfFullFileNameParam, single_hdf_file_name);  
                 strcat(hdfFilePath,single_hdf_file_name);
-                nxstat = NXopen (hdfFilePath, NXACC_CREATE5, &capture_file_id);
+                
+								if(capture_group_num>0){
+                   NXclosegroup (capture_file_id);
+                   NXclosegroup (capture_file_id);
+                   NXclose (&capture_file_id);
+								}
+								
+								nxstat = NXopen (hdfFilePath, NXACC_CREATE5, &capture_file_id);
                 if (nxstat == NX_ERROR) {
                      asynPrint(this->pasynUserSelf, ASYN_TRACE_ERROR,
                     "Error cannot open HDF file\n");
@@ -1409,7 +1423,8 @@ void ADnED::eventHandler(shared_ptr<epics::pvData::PVStructure> const &pv_struct
                 NXcompmakedata64 (capture_file_id, "event_index", NX_INT64, 1, unlimited_dims,NX_COMP_LZW,&dim1);
                 NXopendata (capture_file_id, "event_index");
                 NXclosedata (capture_file_id);
-
+                capture_group_num = 0;
+                start_every_slap = 0;
                 }
                   
                     NXopenpath (capture_file_id,"/csns/instrument/monitor0");
@@ -1431,7 +1446,7 @@ void ADnED::eventHandler(shared_ptr<epics::pvData::PVStructure> const &pv_struct
 
                     NXopenpath (capture_file_id,"/csns/instrument/monitor0");
                     NXopendata (capture_file_id, "event_pulse_time");
-                    slab_start[0] = capture_group_num%pulse_num_per_file; slab_size[0] = 1;
+                    slab_start[0] = capture_group_num; slab_size[0] = 1;
                     NXputslab64 (capture_file_id, m_eventPulseTime, slab_start,slab_size);
                     NXclosedata (capture_file_id);
                     NXflush (&capture_file_id);  
@@ -1443,17 +1458,15 @@ void ADnED::eventHandler(shared_ptr<epics::pvData::PVStructure> const &pv_struct
                     NXflush (&capture_file_id);
 
 
-
                   NXclosegroup (capture_file_id);
                   start_every_slap += pixelsLength;
-                  if(capture_group_num % pulse_num_per_file == (pulse_num_per_file-1))
-                   {
-                      NXclosegroup (capture_file_id);
-                      NXclosegroup (capture_file_id);
-                      NXclose (&capture_file_id);
-                      start_every_slap = 0;
-                    }
-                  capture_group_num++;
+                 // if(capture_group_num % pulse_num_per_file == (pulse_num_per_file-1))
+                 // {
+                 //     NXclosegroup (capture_file_id);
+                 //     NXclosegroup (capture_file_id);
+                 //   NXclose (&capture_file_id);
+                 // }
+                 capture_group_num++;
                  
                  break;
 
